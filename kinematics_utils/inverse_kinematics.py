@@ -2,13 +2,14 @@ import numpy as np
 
 
 class IKSolver:
-    def __init__(self, robot_arm_lengths, is_rghit_hand=True):
+    def __init__(self, robot_arm_lengths, initial_position, is_rghit_hand=True):
         self.lengths = robot_arm_lengths
         self.xy_fab_length = [robot_arm_lengths[3], robot_arm_lengths[4], robot_arm_lengths[6] + robot_arm_lengths[7]]
         self.is_right_hand = is_rghit_hand
+        self.last_position = initial_position
         self.last_xy_nodes = np.array([[0, 0.218], [-1, 0.5], [-1, 0.723]])
 
-    def calc_inverse_kinematics(self, goal_position, goal_quaternion, last_position):
+    def calc_inverse_kinematics(self, goal_position, goal_quaternion, debug=False):
         def _calc_distance(pos_1, pos_2):
             return np.sqrt(np.sum((np.array(pos_1) - np.array(pos_2)) ** 2))
 
@@ -23,6 +24,14 @@ class IKSolver:
             )
 
             return matrix
+
+        def _normalize_angle(angle):
+            angle = angle % (2 * np.pi)
+            while angle > np.pi:
+                angle -= 2 * np.pi
+            while angle <= -np.pi:
+                angle += 2 * np.pi
+            return angle
 
         def _calc_local_unit_vectors(H):
             """
@@ -90,9 +99,9 @@ class IKSolver:
             xz_j6back_angle = np.arctan2(-j6back_pos[0], -j6back_pos[2])
 
             if self.is_right_hand:
-                j1_rotation = self.normalize_angle(xz_j6back_angle - xz_j6back_j1_j2_angle)
+                j1_rotation = _normalize_angle(xz_j6back_angle - xz_j6back_j1_j2_angle)
             else:
-                j1_rotation = self.normalize_angle(xz_j6back_angle + xz_j6back_j1_j2_angle)
+                j1_rotation = _normalize_angle(xz_j6back_angle + xz_j6back_j1_j2_angle)
 
             j2_position = np.array(
                 [
@@ -122,29 +131,25 @@ class IKSolver:
 
             return j4_position, j5_position
 
-        def _calc_j3_position_j2_j3_rotation(joint_position_results):
-            def convert_local_to_global(joint_positon_results, j2j3j4_positions):
-                j2 = joint_positon_results["j2"]
-                j4 = joint_positon_results["j4"]
-
-                j2_j4_vector = j4 - j2
+        def _calc_j3_position_j2_j3_rotation(j2_position, j4_position):
+            def _convert_local_to_global(j2_position, j4_position, j2j3j4_positions):
+                j2_j4_vector = j4_position - j2_position
                 j2_j4_vector /= np.linalg.norm(j2_j4_vector)
 
-                x_global = j2_j4_vector[0] * j2j3j4_positions[1][0] + j2[0]
+                x_global = j2_j4_vector[0] * j2j3j4_positions[1][0] + j2_position[0]
                 y_global = j2j3j4_positions[1][1]
-                z_global = j2_j4_vector[0] * j2j3j4_positions[1][0] + j2[2]
+                z_global = j2_j4_vector[0] * j2j3j4_positions[1][0] + j2_position[2]
 
                 return np.array([x_global, y_global, z_global])
 
-            j2 = joint_position_results["j2"]
-            j4 = joint_position_results["j4"]
-
-            j4_pos_for_fabrik = np.array(_calc_distance([j2[0], 0, j2[2]], [j4[0], 0, j4[2]]), j4[1])
-            j2_pos_for_fabrik = np.array([0, j2[1]])
+            j4_pos_for_fabrik = np.array(
+                _calc_distance([j2_position[0], 0, j2_position[2]], [j4_position[0], 0, j4_position[2]]), j4_position[1]
+            )
+            j2_pos_for_fabrik = np.array([0, j2_position[1]])
 
             j2j3j4_positions = self.xy_fabrik(j4_pos_for_fabrik, j2_pos_for_fabrik)
 
-            j3_position = convert_local_to_global(joint_position_results, j2j3j4_positions)
+            j3_position = _convert_local_to_global(j2_position, j4_position, j2j3j4_positions)
 
             local_j2j3_vector = np.array(j2j3j4_positions[1]) - np.array(j2j3j4_positions[0])
             j2_rotation = np.arctan2(local_j2j3_vector[1], local_j2j3_vector[0])
@@ -157,13 +162,9 @@ class IKSolver:
         def _calc_j6_position(j6back_pos, local_unit_vectors):
             return j6back_pos + local_unit_vectors["z_vector"] * self.lengths[8]
 
-        def _calc_j4_rotation(joint_position_results, joint_rotation_results, unit_direction_vector):
-            xz_base_j4_length = _calc_distance(
-                [joint_position_results["j4"].x, 0, joint_position_results["j4"].z], [0, 0, 0]
-            )
-            xz_base_j5_length = _calc_distance(
-                [joint_position_results["j5"].x, 0, joint_position_results["j5"].z], [0, 0, 0]
-            )
+        def _calc_j4_rotation(j4_position, j5_position, j2_rotation, j3_rotation, unit_direction_vector):
+            xz_base_j4_length = _calc_distance([j4_position[0], 0, j4_position[2]], [0, 0, 0])
+            xz_base_j5_length = _calc_distance([j5_position[0], 0, j5_position[2]], [0, 0, 0])
 
             xz_j1_j2_length = self.lengths[2] + self.lengths[5]
             xz_j2_j4_rength = np.sqrt(xz_base_j4_length**2 - xz_j1_j2_length**2)
@@ -179,15 +180,11 @@ class IKSolver:
                 ]
             )
 
-            j4_rotation = (
-                np.arctan2(-xy_j5_j4_vector[0], xy_j5_j4_vector[1])
-                - joint_rotation_results["j2"]
-                - joint_rotation_results["j3"]
-            )
+            j4_rotation = np.arctan2(-xy_j5_j4_vector[0], xy_j5_j4_vector[1]) - j2_rotation - j3_rotation
             return j4_rotation
 
-        def _calc_j5_rotation(joint_position_results, local_unit_vectors, unit_direction_vector):
-            xz_base_j2_vector = np.array([joint_position_results["j2"].x, 0, joint_position_results["j2"].z])
+        def _calc_j5_rotation(j2_position, local_unit_vectors, unit_direction_vector):
+            xz_base_j2_vector = np.array([j2_position[0], 0, j2_position[2]])
             xz_base_j2_vector /= np.linalg.norm(xz_base_j2_vector)
             local_z_vector = np.cross(xz_base_j2_vector, unit_direction_vector)
             local_z_vector /= np.linalg.norm(local_z_vector)
@@ -244,7 +241,52 @@ class IKSolver:
 
         transformation_matrix = _quaternion_to_matrix(goal_quaternion)
         local_unit_vectors = _calc_local_unit_vectors(transformation_matrix)
-        print(f"local_unit_vectors: {local_unit_vectors}")
+
+        j6back_pos = np.array(
+            [
+                goal_position[0] + local_unit_vectors["z_vector"][0] * self.lengths[8],
+                goal_position[1] + local_unit_vectors["z_vector"][1] * self.lengths[8],
+                goal_position[2] + local_unit_vectors["z_vector"][2] * self.lengths[8],
+            ]
+        )
+
+        j1_rotation, j2_position = _calc_j1_rotation_j2_position(j6back_pos)
+        joint_rotation_results["j1"] = j1_rotation
+        joint_position_results["j2"] = j2_position
+
+        xz_base_j2_vector = np.array([j2_position[0], 0, j2_position[2]])
+
+        unit_direction_vector = np.cross(xz_base_j2_vector, local_unit_vectors["z_vector"])
+        unit_direction_vector /= np.linalg.norm(unit_direction_vector)
+        if unit_direction_vector[1] < 0:
+            unit_direction_vector *= -1
+
+        j4_position, j5_position = _calc_j4_j5_position(j6back_pos, self.last_position, unit_direction_vector)
+        joint_position_results["j4"] = j4_position
+        joint_position_results["j5"] = j5_position
+
+        j3_position, j2_rotation, j3_rotation = _calc_j3_position_j2_j3_rotation(j2_position, j4_position)
+        joint_position_results["j3"] = j3_position
+        joint_rotation_results["j2"] = j2_rotation
+        joint_rotation_results["j3"] = j3_rotation
+
+        j6_position = _calc_j6_position(j6back_pos, local_unit_vectors)
+        joint_position_results["j6"] = j6_position
+
+        j4_rotation = _calc_j4_rotation(j4_position, j5_position, j2_rotation, j3_rotation, unit_direction_vector)
+        joint_rotation_results["j4"] = j4_rotation
+
+        j5_rotation = _calc_j5_rotation(j2_position, local_unit_vectors, unit_direction_vector)
+        joint_rotation_results["j5"] = j5_rotation
+
+        j6_rotation = _calc_j6_rotation(local_unit_vectors, unit_direction_vector)
+        joint_rotation_results["j6"] = j6_rotation
+
+        if debug:
+            print(f"[IK DEBUG] joint positions: {joint_position_results}")
+            print(f"[IK DEBUG] joint rotations: {joint_rotation_results}")
+
+        return joint_position_results, joint_rotation_results
 
     def xy_fabrik(self, target, start):
         def xy_get_point(t_num, s_num, xy_nodes):

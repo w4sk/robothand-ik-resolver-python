@@ -1,7 +1,7 @@
 import numpy as np
 
 
-class FKResolver:
+class FKSolver:
     def __init__(self, robot_arm_lengths):
         self.lengths = robot_arm_lengths
 
@@ -37,14 +37,14 @@ class FKResolver:
             ]
         )
 
-    def calc_forward_kinematics(self, joint_angles, is_degrees=True):
+    def calc_forward_kinematics(self, joint_angles, is_degrees=True, debug=False):
         if is_degrees:
             joint_angles = [angle * np.pi / 180 for angle in joint_angles]
 
         H1 = np.array(
             [
                 [1, 0, 0, 0],
-                [0, 2, 0, self.lengths[0]],
+                [0, 1, 0, self.lengths[0]],
                 [0, 0, 1, 0],
                 [0, 0, 0, 1],
             ]
@@ -59,22 +59,27 @@ class FKResolver:
         ]
 
         H = H1
-        positions = []
         base_pos = np.array([0, 0, 0, 1])
-        for R, T in transforms:
+        positions = {}
+
+        # j1の位置
+        pos = np.dot(H1, base_pos)
+        positions["j1"] = pos[:3]
+
+        # j2以降の位置を計算
+        for i, (R, T) in enumerate(transforms, start=2):
             H = np.dot(H, np.dot(R, T))
             pos = np.dot(H, base_pos)
-            positions.append({"x": pos[0], "y": pos[1], "z": pos[2]})
+            positions[f"j{i}"] = pos[:3]
 
-        j1_pos = np.dot(H1, base_pos)
-        positions.insert(0, {"x": j1_pos[0], "y": j1_pos[1], "z": j1_pos[2]})
-
+        if debug:
+            print(f"[FK DEBUG] joint positions: {positions}")
         return positions
 
 
 if __name__ == "__main__":
     length = [0.125, 0.093, 0.05, 0.28, 0.225, 0.0655, 0.064, 0.056, 0.0845]
-    fk = FKResolver(length)
+    fk = FKSolver(length)
     wknodes = fk.calc_forward_kinematics(joint_angles=[0, 0, 0, 0, 0], is_degrees=True)
     for i, wknode in enumerate(wknodes):
         print(f"joint{i} x: {wknode['x']}, y: {wknode['y']}, z: {wknode['z']}")
