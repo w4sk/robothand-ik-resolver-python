@@ -14,7 +14,7 @@ class IKSolver:
             return np.sqrt(np.sum((np.array(pos_1) - np.array(pos_2)) ** 2))
 
         def _quaternion_to_matrix(q):
-            w, x, y, z = q  # qはnp.arrayやリストで [w, x, y, z]
+            x, y, z, w = q
             matrix = np.array(
                 [
                     [2 * w**2 + 2 * x**2 - 1, 2 * x * y - 2 * z * w, 2 * x * z + 2 * y * w],
@@ -91,7 +91,7 @@ class IKSolver:
             }
 
         def _calc_j1_rotation_j2_position(j6back_pos):
-            xz_base_j6back_length = _calc_distance(np.array([0, 0, 0]), j6back_pos)
+            xz_base_j6back_length = _calc_distance(np.array([0, 0, 0]), [j6back_pos[0], 0, j6back_pos[2]])
             xz_j1_j2_length = self.lengths[2] + self.lengths[5]
             xz_j2_j6back_length = np.sqrt(max(np.finfo(float).eps, xz_base_j6back_length**2 - xz_j1_j2_length**2))
             ratio = np.clip(xz_j1_j2_length / xz_j2_j6back_length, -1, 1)
@@ -102,7 +102,6 @@ class IKSolver:
                 j1_rotation = _normalize_angle(xz_j6back_angle - xz_j6back_j1_j2_angle)
             else:
                 j1_rotation = _normalize_angle(xz_j6back_angle + xz_j6back_j1_j2_angle)
-
             j2_position = np.array(
                 [
                     -xz_j1_j2_length * np.sin(j1_rotation),
@@ -143,7 +142,10 @@ class IKSolver:
                 return np.array([x_global, y_global, z_global])
 
             j4_pos_for_fabrik = np.array(
-                _calc_distance([j2_position[0], 0, j2_position[2]], [j4_position[0], 0, j4_position[2]]), j4_position[1]
+                [
+                    _calc_distance([j2_position[0], 0, j2_position[2]], [j4_position[0], 0, j4_position[2]]),
+                    j4_position[1],
+                ]
             )
             j2_pos_for_fabrik = np.array([0, j2_position[1]])
 
@@ -152,15 +154,15 @@ class IKSolver:
             j3_position = _convert_local_to_global(j2_position, j4_position, j2j3j4_positions)
 
             local_j2j3_vector = np.array(j2j3j4_positions[1]) - np.array(j2j3j4_positions[0])
-            j2_rotation = np.arctan2(local_j2j3_vector[1], local_j2j3_vector[0])
+            j2_rotation = np.arctan2(local_j2j3_vector[0], local_j2j3_vector[1])
 
             local_j3j4_vector = np.array(j2j3j4_positions[2]) - np.array(j2j3j4_positions[1])
-            j3_rotation = np.arctan2(local_j3j4_vector[1], local_j3j4_vector[0]) - j2_rotation
+            j3_rotation = np.arctan2(local_j3j4_vector[0], local_j3j4_vector[1]) - j2_rotation
 
             return j3_position, j2_rotation, j3_rotation
 
         def _calc_j6_position(j6back_pos, local_unit_vectors):
-            return j6back_pos + local_unit_vectors["z_vector"] * self.lengths[8]
+            return j6back_pos + local_unit_vectors["z_vector"] * -self.lengths[8]
 
         def _calc_j4_rotation(j4_position, j5_position, j2_rotation, j3_rotation, unit_direction_vector):
             xz_base_j4_length = _calc_distance([j4_position[0], 0, j4_position[2]], [0, 0, 0])
@@ -180,7 +182,7 @@ class IKSolver:
                 ]
             )
 
-            j4_rotation = np.arctan2(-xy_j5_j4_vector[0], xy_j5_j4_vector[1]) - j2_rotation - j3_rotation
+            j4_rotation = np.arctan2(-xy_j5_j4_vector[0], -xy_j5_j4_vector[1]) - j2_rotation - j3_rotation
             return j4_rotation
 
         def _calc_j5_rotation(j2_position, local_unit_vectors, unit_direction_vector):
@@ -238,6 +240,8 @@ class IKSolver:
             "j5": np.array([0, 0, 0]),
             "j6": np.array([goal_position[0], goal_position[1], goal_position[2]]),
         }
+
+        goal_position = goal_position + self.last_position
 
         transformation_matrix = _quaternion_to_matrix(goal_quaternion)
         local_unit_vectors = _calc_local_unit_vectors(transformation_matrix)
